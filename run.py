@@ -33,23 +33,12 @@ def run_experiment(n_inputs=28, window_size=10, model_type = "Transformer", comp
     model_hyperparams = {**PRESETS[model_type],**kwargs}
     X = Operand((window_size,n_inputs))
     return MODELS[model_type](X,register=register,type=compression_type,**model_hyperparams)[1]
-    # _,register = MODELS[model_type](X,type=compression_type,**model_hyperparams)
-    # size = register.size()
-    # BOPs = register.bops
-    # print(f'size: {size/1_000}KiB, BOPs: {BOPs}')
-    # return register
 
-    # if not os.path.exists(save_path):
-    #     df = pandas.DataFrame(columns=["model_type","compression_type","window_size","n_inputs","size(KiB)","BOPs"])
-    # else:
-    #     df = pandas.read_csv(save_path)
-    # df.loc[len(df)] = {"model_type":model_type}
-    # return register
 
 def run_experiment_grid(save_path="./results.csv",skip_previous=True,bops_units="G",size_units="M",**grid):
     if not os.path.exists(save_path):
     # if True:
-        df = pandas.DataFrame(columns=[*list(grid.keys()),f'size({size_units}iB)',f'{bops_units}BOPs'])
+        df = pandas.DataFrame(columns=[*list(grid.keys()),f'size({size_units}b)',f'{bops_units}BOPs'])
         load = False
     else:
         df = pandas.read_csv(save_path)
@@ -62,7 +51,7 @@ def run_experiment_grid(save_path="./results.csv",skip_previous=True,bops_units=
             print("skipping",params[i])
             continue
         register = run_experiment(bops_units=bops_units,size_units=size_units,**params[i])
-        df.loc[len(df)] = {**params[i],f'size({size_units}iB)':register.size(),f'{bops_units}BOPs':register.bops}
+        df.loc[len(df)] = {**params[i],f'size({size_units}b)':register.size(),f'{bops_units}BOPs':register.bops}
         print(df.loc[len(df)-1])
         df.to_csv(save_path,index=False)
     return df

@@ -66,7 +66,6 @@ def multiply(operand1, operand2):
 def exp(operand,terms=5):
     n_ops = np.prod(operand.shape)
     return n_ops * ((operand.bit_width * (terms+1)) + ((operand.bit_width**2) * terms)),operand
-    # return n_ops * ((operand.bit_width ** 7) + (operand.bit_width * 12)), operand
 
 def pow(operand,exponent):
     n_ops = np.prod(operand.shape)
@@ -74,7 +73,8 @@ def pow(operand,exponent):
     return n_ops * ((operand.bit_width ** 2) * (halves + (np.mod(exponent // (2**np.arange(halves)),2) == 1).astype(int).sum() )), operand
 
 def root(operand,exponent):
-    return pow(operand, exponent)
+    n_ops = np.prod(operand.shape)
+    return n_ops * (operand.bit_width**2) * math.log2(exponent), operand
 
 
 ## compund operations
@@ -124,12 +124,15 @@ def sb_linear(weight,activation,prune_rate = 0.5,accumulator_width=32):
 class Linear(Operand):
     def __init__(self,*shape,type="dense",bias_width = 32):
         self.type = type.split("_")
+        self.scaling_param_size = 0
         if self.type[0] == "quantize":
             super().__init__(shape,8 if len(self.type)==1 else int(self.type[1]))
             self.operation = lambda X: quantize_linear(self,X,q_bits = self.bit_width if len(self.type) < 3 else int(self.type[2]),accumulator_width=bias_width)
+            self.scaling_param_size = 2 * bias_width
         elif self.type[0] == "SB":
             super().__init__(shape,1)
             self.operation = lambda X: sb_linear(self,X,prune_rate  = float(self.type[1]),accumulator_width=bias_width)
+            self.scaling_param_size = bias_width
         elif self.type[0] == "dense":
             super().__init__(shape,32)
             self.operation = lambda X: matmul(X,self,accumulator_width=bias_width)
@@ -138,7 +141,7 @@ class Linear(Operand):
         self.bias_width = bias_width
         
     def size(self):
-        return super().size() + (self.shape[-1] * self.bias_width)
+        return super().size() + (self.shape[-1] * self.bias_width) + self.scaling_param_size
     def __call__(self,X):
         return self.operation(X)
     
@@ -156,13 +159,14 @@ class RMSNorm(Operand):
 
 class Conv1d(Operand):
     def __init__(self,n_inputs,n_outputs,patch_size,bit_width=32,bias_width=32):
-        super().__init__((patch_size*n_inputs,n_outputs),bit_width=bit_width)
+        super().__init__((n_inputs,patch_size,n_outputs),bit_width=bit_width)
         self.bias_width = bias_width
         self.bias_dim = n_outputs
 
+
     def __call__(self,X):
-        X = Operand((X.shape[0],self.shape[0]),self.bit_width)
-        return matmul(X,self,accumulator_width=self.bit_width)
+        X = Operand((X.shape[0],self.shape[0]*self.shape[1]),self.bit_width)
+        return matmul(X,self.reshape((self.shape[0] * self.shape[1],self.shape[2])),accumulator_width=self.bit_width)
     
     def size(self):
         return super().size() + (self.bias_dim * self.bias_width)
@@ -173,6 +177,8 @@ class BopCounter:
         self.bops = 0
         self.parameters = {}
         self.blocks = {}
+        self.bops_units = f'{bops_units}BOPs'
+        self.size_units = f'{size_units}b'
         self.bops_base = UNITS[bops_units]
         self.size_base = UNITS[size_units]
     
@@ -188,6 +194,18 @@ class BopCounter:
         if parameter in self.parameters:
             print(f"Warning: {name} already exists")
         self.parameters[name] = parameter
+    
+    def __repr__(self):
+        string = f"BOPs counted: {self.bops/self.bops_base}{self.bops_units}\n"
+        for k,v in self.parameters.items():
+            string += k + "\n"
+            string += "\t" + str(v) + "\n"
+            string += "\t size:" + str(v.size()/self.size_base) + " " + self.size_units + "\n"
+        return string
+    
+    def __str__(self):
+        return self.__repr__()
+
     
     def __getitem__(self,name):
         print(name,self.parameters[name].shape)

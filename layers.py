@@ -3,7 +3,7 @@ import math
 
 
 
-def MLP(X,n_outputs=None,register=None,n_hiddens=[40],act_func="relu",type="dense",**kwargs):
+def MLP(X:operations.Operand,n_outputs=None,register=None,n_hiddens=[40],act_func="relu",type="dense",**kwargs):
     """
         Computes cost and symbolic forward pass of a multi-layer perceptron (MLP) using mixed-precision
         linear layers and activation functions.
@@ -53,7 +53,7 @@ def MLP(X,n_outputs=None,register=None,n_hiddens=[40],act_func="relu",type="dens
         n_inputs = nh
     return X,register
 
-def transformer_encoder_block(X,model_dim=32,depth_multiplier=2,n_heads = 4,register=None,type="dense",**kwargs):
+def transformer_encoder_block(X:operations.Operand,model_dim=32,depth_multiplier=2,n_heads = 4,register=None,type="dense",**kwargs):
     """
         Compute the cost and symbolic forward pass of a Transformer encoder block.
 
@@ -117,7 +117,7 @@ def transformer_encoder_block(X,model_dim=32,depth_multiplier=2,n_heads = 4,regi
     X = register(register[block_id +"LN2"](X))
     return X,register
 
-def LSTM_cell(X,hidden_size = 30,type="dense",register=None,**kwargs):
+def LSTM_cell(X:operations.Operand,hidden_size = 30,type="dense",register=None,**kwargs):
     """
         Compute the cost and symbolic forward pass of an LSTM cell unrolled
         through time.
@@ -184,7 +184,7 @@ def LSTM_cell(X,hidden_size = 30,type="dense",register=None,**kwargs):
         Hs[i] = H
     return Hs,register
 
-def SSM_layer(X,d_state=16,type="dense",register=None,**kwargs):
+def SSM_layer(X:operations.Operand,d_state=16,type="dense",register=None,**kwargs):
     """
         Compute the cost and symbolic forward pass of a state-space model (SSM) layer
         through time.
@@ -248,7 +248,7 @@ def SSM_layer(X,d_state=16,type="dense",register=None,**kwargs):
     Y = register(operations.add(Y,D))
     return Y, register
 
-def MAMBA_block(X, register = None, d_expand=2, patch_size=4,act_func="relu", type="dense",ssm_layer_f = SSM_layer,**kwargs):
+def MAMBA_block(X:operations.Operand, register = None, d_expand=2, patch_size=4,act_func="relu", type="dense",ssm_layer_f = SSM_layer,**kwargs):
     """
         Compute the cost and symbolic forward pass of a Mamba-style block.
 

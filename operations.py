@@ -9,6 +9,30 @@ UNITS = {
 
 
 class Operand:
+    """
+        Represents a tensor-like object with an associated bit-width for mixed-precision
+        hardware cost estimation.
+
+        The Operand class is a lightweight wrapper around a NumPy array used only for 
+        tracking shape and bit-width. It enables symbolic propagation 
+        through operations while keeping track of storage cost in bits.
+
+        Parameters
+        ----------
+        shape : tuple[int]
+            Shape of the operand tensor.
+        bit_width : int, optional
+            Number of bits used to represent each element (default: 32).
+
+        Attributes
+        ----------
+        shape : tuple[int]
+            Tensor dimensions.
+        bit_width : int
+            Precision of each element in bits.
+        value : np.ndarray
+            Simulated array only for shape propagation; numerical content is irrelevant.
+    """
     def __init__(self,shape,bit_width=32):
         self.shape = shape
         self.bit_width = bit_width
@@ -122,20 +146,60 @@ def sb_linear(weight,activation,prune_rate = 0.5,accumulator_width=32):
     return bops,output
 
 class Linear(Operand):
+    """
+        Operand used to estimate BOPs and storage cost of a parameterized linear transformation 
+        with support for multiple precision and sparsity schemes.
+
+        This is a subclass of Operand, but represents a *weight matrix* rather than 
+        a generic activation tensor. Different types include:
+            - dense (standard FP32 or configured width)
+            - quantize (uniform quantization, optional 2-bit/4-bit/etc.)
+            - SB (structured block sparsity with prune rate)
+
+        Parameters
+        ----------
+        *shape : int
+            Dimensions of the weight matrix (in_features, out_features).
+        type : str, optional
+            Encoding of the linear layer type:
+                "dense" → normal FP32
+                "quantize" or "quantize_<wbits>_<abits>"
+                "SB_<prune_rate>"
+        bias_width : int, optional
+            Bit-width used for bias accumulation (default: 32).
+
+        Attributes
+        ----------
+        type : list[str]
+            Parsed type specification fields.
+        scaling_param_size : int
+            Additional bits required for quantization scales or sparsity encoding.
+        operation : callable
+            Function computing bit-ops for the chosen linear type.
+        bias_width : int
+            Bit-width for accumulator/bias.
+
+        Methods
+        -------
+        __call__(X)
+            Returns (bops,operand) for symbolic propagation.
+        size()
+            Returns total parameter storage in bits
+    """
     def __init__(self,*shape,type="dense",bias_width = 32):
         self.type = type.split("_")
         self.scaling_param_size = 0
         if self.type[0] == "quantize":
             super().__init__(shape,8 if len(self.type)==1 else int(self.type[1]))
-            self.operation = lambda X: quantize_linear(self,X,q_bits = self.bit_width if len(self.type) < 3 else int(self.type[2]),accumulator_width=bias_width)
+            self.operation = lambda ws,X: quantize_linear(ws,X,q_bits = self.bit_width if len(self.type) < 3 else int(self.type[2]),accumulator_width=bias_width)
             self.scaling_param_size = 2 * bias_width
         elif self.type[0] == "SB":
             super().__init__(shape,1)
-            self.operation = lambda X: sb_linear(self,X,prune_rate  = float(self.type[1]),accumulator_width=bias_width)
-            self.scaling_param_size = bias_width
+            self.operation = lambda ws,X: sb_linear(ws,X,prune_rate  = float(self.type[1]),accumulator_width=bias_width)
+            self.scaling_param_size = bias_width + np.prod(shape)
         elif self.type[0] == "dense":
             super().__init__(shape,32)
-            self.operation = lambda X: matmul(X,self,accumulator_width=bias_width)
+            self.operation = lambda ws,X: matmul(X,ws,accumulator_width=bias_width)
         else:
             raise Exception(f"Unkown type: {type}")
         self.bias_width = bias_width
@@ -143,9 +207,20 @@ class Linear(Operand):
     def size(self):
         return super().size() + (self.shape[-1] * self.bias_width) + self.scaling_param_size
     def __call__(self,X):
-        return self.operation(X)
+        return self.operation(self,X)
     
 class LayerNorm(Operand):
+    """
+        Symbolic LayerNorm operator that computes the BOPs and storage cost 
+        associated with layer normalization.
+
+        Methods
+        -------
+        __call__(X)
+            Returns (bops, Operand) for symbolic propagation.
+        size()
+            Returns total parameter storage in bits
+    """
     def __call__(self,X):
         return layer_norm(X,(np.prod(self.shape),))
     
@@ -153,25 +228,89 @@ class LayerNorm(Operand):
         return super().size() * 2
 
 class RMSNorm(Operand):
+    """
+        Symbolic RMSNorm operator that computes the BOPs and storage cost 
+        associated with root-mean-squared normalization.
+
+        Methods
+        -------
+        __call__(X)
+            Returns (bops, Operand) for symbolic propagation.
+    """
     def __call__(self,X):
         return rms_norm(X,(np.prod(self.shape),))
-    
-
-class Conv1d(Operand):
-    def __init__(self,n_inputs,n_outputs,patch_size,bit_width=32,bias_width=32):
-        super().__init__((n_inputs,patch_size,n_outputs),bit_width=bit_width)
-        self.bias_width = bias_width
-        self.bias_dim = n_outputs
 
 
+class Conv1d(Linear):
+    """
+    Symbolic 1D convolution operator that computes the BOPs and storage cost for a 1D convolution 
+    with stride=1, dialation=1, and padding='same'
+
+    Parameters
+    ----------
+    shape : tuple of ints
+        Dimensions of the weight matrix (in_channels, kernel_size, out_channels).
+    type : str, optional
+        Encoding of the linear layer type:
+            "dense" → normal FP32
+            "quantize" or "quantize_<wbits>_<abits>"
+            "SB_<prune_rate>"
+    bias_width : int, optional
+        Bit-width used for bias accumulation (default: 32).
+    Methods
+    -------
+    __call__(X)
+        Computes bit-ops using a reshaped weight matrix and a flattened input.
+    """
     def __call__(self,X):
         X = Operand((X.shape[0],self.shape[0]*self.shape[1]),self.bit_width)
-        return matmul(X,self.reshape((self.shape[0] * self.shape[1],self.shape[2])),accumulator_width=self.bit_width)
-    
-    def size(self):
-        return super().size() + (self.bias_dim * self.bias_width)
+        return self.operation(self.reshape((self.shape[0] * self.shape[1],self.shape[2])),X)
     
 class BopCounter:
+    """
+        Global counter and registry for tracking bit-operations (BOPs) and parameter
+        storage across an entire neural network architecture.
+
+        BopCounter abstracts accumulation, naming, formatting, and unit conversion
+        for both compute and storage metrics.
+
+        Parameters
+        ----------
+        bops_units : str, optional
+            Unit prefix for BOP reporting ('G', 'M', 'K', or ''). Default is 'G'.
+        size_units : str, optional
+            Unit prefix for parameter size reporting ('M', 'K', or ''). Default is 'M'.
+
+        Attributes
+        ----------
+        bops : float
+            Accumulated bit-operations normalized by the chosen base unit.
+        parameters : dict[str, Operand]
+            Mapping of parameter names to their Operand representations.
+        blocks : dict[str, int]
+            Counter used to assign unique IDs to repeated blocks (e.g., layers).
+        bops_units : str
+            Human-readable suffix for BOPs.
+        size_units : str
+            Human-readable suffix for parameter storage.
+        bops_base : int
+            Unit scaling factor (e.g., 1e9 for 'G').
+        size_base : int
+            Unit scaling factor for storage reporting.
+
+        Methods
+        -------
+        get_id(block_name)
+            Assigns and returns a unique layer/block identifier.
+        __call__(op)
+            Accumulates BOPs from a tuple returned by an operation function (bops, operand) and returns operand.
+        __setitem__(name, parameter)
+            Registers a parameter Operand under a given name.
+        __getitem__(name)
+            Retrieves a registered parameter and prints its shape.
+        size()
+            Returns total parameter storage in chosen units.
+    """
     def __init__(self,bops_units="G",size_units="M",**kwargs):
         print("creating new register")
         self.bops = 0

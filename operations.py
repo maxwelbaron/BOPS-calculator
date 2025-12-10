@@ -243,8 +243,7 @@ class RMSNorm(Operand):
 
 class Conv1d(Linear):
     """
-    Symbolic 1D convolution operator that computes the BOPs and storage cost for a 1D convolution 
-    with stride=1, dialation=1, and padding='same'
+    Symbolic 1D convolution operator that computes the BOPs and storage cost for a 1D convolution
 
     Parameters
     ----------
@@ -255,6 +254,13 @@ class Conv1d(Linear):
             "dense" → normal FP32
             "quantize" or "quantize_<wbits>_<abits>"
             "SB_<prune_rate>"
+    padding : {"same", int}, optional
+        Padding applied to the input:
+            - "same"  → output length equals input length divided by stride
+            - int     → symmetric padding on both sides
+        Default is "same".
+    stride : int, optional
+        Stride of the convolution (default: 1).
     bias_width : int, optional
         Bit-width used for bias accumulation (default: 32).
     Methods
@@ -262,9 +268,70 @@ class Conv1d(Linear):
     __call__(X)
         Computes bit-ops using a reshaped weight matrix and a flattened input.
     """
+
+    def __init__(self,size,padding = "same",stride=1):
+        super().__init__(size)
+        if stride > 1 and padding == "same":
+            raise Exception("Invalid combination of arguments: padding=same and stride > 1")
+        self.padding = padding 
+        self.stride = stride
+
+
     def __call__(self,X):
-        X = Operand((X.shape[0],self.shape[0]*self.shape[1]),self.bit_width)
+        if self.padding == "same":
+            length = X.shape[0]
+        else:
+            length = 1 + ((X.shape[0] + (self.padding * 2) - self.shape[1]) // self.stride)
+        X = Operand((length,self.shape[0]*self.shape[1]),self.bit_width)
         return self.operation(self.reshape((self.shape[0] * self.shape[1],self.shape[2])),X)
+
+class Conv2d(Linear):
+    """
+    Symbolic 2D convolution operator that computes the BOPs and storage cost for a 1D convolution
+
+    Parameters
+    ----------
+    shape : tuple of ints
+        Dimensions of the weight matrix (in_channels, kernel_size, out_channels).
+    type : str, optional
+        Encoding of the linear layer type:
+            "dense" → normal FP32
+            "quantize" or "quantize_<wbits>_<abits>"
+            "SB_<prune_rate>"
+    padding : {"same", int}, optional
+        Padding applied to the input:
+            - "same"  → output length equals input length divided by stride
+            - int     → symmetric padding on both sides
+        Default is "same".
+    stride : int, optional
+        Stride of the convolution (default: 1).
+    bias_width : int, optional
+        Bit-width used for bias accumulation (default: 32).
+    Methods
+    -------
+    __call__(X)
+        Computes bit-ops using a reshaped weight matrix and a flattened input.
+    """
+
+    def __init__(self,size,padding = "same",stride=1):
+        in_channels, kernel_size,out_channels = size
+        super().__init__((in_channels,kernel_size,kernel_size,out_channels))
+        if stride > 1 and padding == "same":
+            raise Exception("Invalid combination of arguments: padding=same and stride > 1")
+        self.padding = padding 
+        self.stride = stride
+
+    def __call__(self,X):
+        if self.padding == "same":
+            height = X.shape[0]
+            width = X.shape[1]
+        else:
+            height = 1 + ((X.shape[0] + (self.padding * 2) - self.shape[1]) // self.stride)
+            width = 1 + ((X.shape[1] + (self.padding * 2) - self.shape[2]) // self.stride)
+        X = Operand((height*width,self.shape[0]*self.shape[1]*self.shape[2]),self.bit_width)
+        bops,output = self.operation(self.reshape((self.shape[0] * self.shape[1]*self.shape[2],self.shape[3])),X)
+        return bops,output.reshape((height,width,self.shape[-1]))
+        
     
 class BopCounter:
     """

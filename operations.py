@@ -112,12 +112,32 @@ def tanh(operand):
     return bops, operand
 
 def relu(operand):
-    return 0,operand
+    return np.prod(operand.shape),operand
+
+def silu(operand):
+    bops,operand2 = sigmoid(operand)
+    bops  += multiply(operand,operand2)[0]
+    return bops,operand
+
+def gelu(operand):
+    bops = pow(operand,3)[0] + (3*multiply(operand,Scaler())[0]) + (2*add(operand,Scaler())[0]) +  multiply(operand,operand)[0] + tanh(operand)[0]
+    return bops,operand
+
+def softplus(operand):
+    bops = (exp(operand)[0]*2) + add(operand,Scaler())[0]
+    return bops, operand
 
 ACTIVATION = {
     "sigmoid":sigmoid,
     "tanh":tanh,
-    "relu":relu
+    "relu":relu,
+    "silu":silu,
+    "gelu":gelu,
+    "ReLU":relu,
+    "Tanh":tanh,
+    "GeLU":gelu,
+    "SiLU":silu,
+    "Sigmoid":sigmoid
 }
 
 def rms_norm(operand,shape):
@@ -269,8 +289,8 @@ class Conv1d(Linear):
         Computes bit-ops using a reshaped weight matrix and a flattened input.
     """
 
-    def __init__(self,size,padding = "same",stride=1):
-        super().__init__(size)
+    def __init__(self,*size,padding = "same",stride=1,type="dense"):
+        super().__init__(*size,type=type)
         if stride > 1 and padding == "same":
             raise Exception("Invalid combination of arguments: padding=same and stride > 1")
         self.padding = padding 
@@ -313,9 +333,9 @@ class Conv2d(Linear):
         Computes bit-ops using a reshaped weight matrix and a flattened input.
     """
 
-    def __init__(self,size,padding = "same",stride=1):
+    def __init__(self,*size,padding = "same",stride=1,type="dense"):
         in_channels, kernel_size,out_channels = size
-        super().__init__((in_channels,kernel_size,kernel_size,out_channels))
+        super().__init__(in_channels,kernel_size,kernel_size,out_channels,type=type)
         if stride > 1 and padding == "same":
             raise Exception("Invalid combination of arguments: padding=same and stride > 1")
         self.padding = padding 
@@ -402,11 +422,11 @@ class BopCounter:
         self.parameters[name] = parameter
     
     def __repr__(self):
-        string = f"BOPs counted: {self.bops/self.bops_base}{self.bops_units}\n"
+        string = f"BOPs counted: {self.bops}{self.bops_units}\n"
         for k,v in self.parameters.items():
             string += k + "\n"
             string += "\t" + str(v) + "\n"
-            string += "\t size:" + str(v.size()/self.size_base) + " " + self.size_units + "\n"
+            string += "\t size:" + str(v.size()) + " " + self.size_units + "\n"
         return string
     
     def __str__(self):

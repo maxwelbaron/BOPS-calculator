@@ -112,7 +112,8 @@ def tanh(operand):
     return bops, operand
 
 def relu(operand):
-    return np.prod(operand.shape),operand
+    return 0,operand
+    #return np.prod(operand.shape),operand
 
 def silu(operand):
     bops,operand2 = sigmoid(operand)
